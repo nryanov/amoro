@@ -298,6 +298,9 @@ public class DashboardServer {
                 "/catalogs/{catalog}/dbs/{db}/tables/{table}/consumers",
                 tableController::getTableConsumerInfos);
             post(
+                "/catalogs/{catalog}/dbs/{db}/tables/{table}/optimizing",
+                tableController::triggerOptimizing);
+            post(
                 "/catalogs/{catalog}/dbs/{db}/tables/{table}/optimizing-processes/{processId}/cancel",
                 tableController::cancelOptimizingProcess);
           });

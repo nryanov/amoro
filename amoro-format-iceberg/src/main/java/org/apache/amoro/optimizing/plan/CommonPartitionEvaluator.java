@@ -88,6 +88,7 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
   private long cost = -1;
   private Boolean necessary = null;
   private OptimizingType optimizingType = null;
+  private final OptimizingType forcedOptimizingType;
   private String name;
 
   public CommonPartitionEvaluator(
@@ -98,6 +99,26 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
       long lastMinorOptimizingTime,
       long lastFullOptimizingTime,
       long lastMajorOptimizingTime) {
+    this(
+        identifier,
+        config,
+        partition,
+        planTime,
+        lastMinorOptimizingTime,
+        lastFullOptimizingTime,
+        lastMajorOptimizingTime,
+        null);
+  }
+
+  public CommonPartitionEvaluator(
+      ServerTableIdentifier identifier,
+      OptimizingConfig config,
+      Pair<Integer, StructLike> partition,
+      long planTime,
+      long lastMinorOptimizingTime,
+      long lastFullOptimizingTime,
+      long lastMajorOptimizingTime,
+      OptimizingType forcedOptimizingType) {
     this.identifier = identifier;
     this.config = config;
     this.partition = partition;
@@ -112,6 +133,7 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
     this.lastMinorOptimizingTime = lastMinorOptimizingTime;
     this.lastMajorOptimizingTime = lastMajorOptimizingTime;
     this.lastFullOptimizingTime = lastFullOptimizingTime;
+    this.forcedOptimizingType = forcedOptimizingType;
     this.reachFullInterval =
         config.getFullTriggerInterval() >= 0
             && planTime - lastFullOptimizingTime > config.getFullTriggerInterval();
@@ -180,6 +202,12 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
       rewriteSegmentFileCount++;
       rewriteSegmentFileRecords += dataFile.recordCount();
       return true;
+    }
+
+    if (forcedOptimizingType == OptimizingType.MINOR) {
+      // Record position-delete combining before necessity is decided. Disposal runs again later
+      // and moves the file into the position-delete rewrite set.
+      segmentShouldRewritePos(dataFile, deletes);
     }
 
     // Cache the size of the smallest two files
@@ -260,6 +288,9 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
     if (isFragmentFile(dataFile)) {
       return true;
     }
+    if (forcedOptimizingType == OptimizingType.MINOR) {
+      return false;
+    }
     // When Upsert writing is enabled in the Flink engine, both INSERT and UPDATE_AFTER will
     // generate deletes files (Most are eq-delete), and eq-delete file will be associated
     // with the data file before the current snapshot.
@@ -297,6 +328,12 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
   }
 
   protected boolean isFullOptimizing() {
+    if (forcedOptimizingType == OptimizingType.FULL) {
+      return true;
+    }
+    if (forcedOptimizingType != null) {
+      return false;
+    }
     return reachFullInterval();
   }
 
@@ -325,6 +362,11 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
   @Override
   public boolean isNecessary() {
     if (necessary == null) {
+      if (forcedOptimizingType != null) {
+        necessary = isForcedNecessary();
+        LOG.debug("{} necessary = {}, {}", name(), necessary, this);
+        return necessary;
+      }
       long lastPlanTime =
           Math.max(
               Math.max(lastMinorOptimizingTime, lastMajorOptimizingTime), lastFullOptimizingTime);
@@ -379,13 +421,42 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
   @Override
   public OptimizingType getOptimizingType() {
     if (optimizingType == null) {
-      optimizingType =
-          isFullNecessary()
-              ? OptimizingType.FULL
-              : isMajorNecessary() ? OptimizingType.MAJOR : OptimizingType.MINOR;
+      if (forcedOptimizingType != null) {
+        optimizingType = forcedOptimizingType;
+      } else {
+        optimizingType =
+            isFullNecessary()
+                ? OptimizingType.FULL
+                : isMajorNecessary() ? OptimizingType.MAJOR : OptimizingType.MINOR;
+      }
       LOG.debug("{} optimizingType = {} ", name(), optimizingType);
     }
     return optimizingType;
+  }
+
+  private boolean isForcedNecessary() {
+    switch (forcedOptimizingType) {
+      case MINOR:
+        return fragmentFileCount + equalityDeleteFileCount > 0 || combinePosSegmentFileCount > 0;
+      case MAJOR:
+        return fragmentFileCount + equalityDeleteFileCount > 0
+            || combinePosSegmentFileCount > 0
+            || undersizedSegmentFileCount > 0
+            || rewriteSegmentFileCount > 0
+            || rewritePosSegmentFileCount > 0;
+      case FULL:
+        return isFullInputPresent();
+      default:
+        return false;
+    }
+  }
+
+  private boolean isFullInputPresent() {
+    return anyDeleteExist()
+        || fragmentFileCount >= 2
+        || undersizedSegmentFileCount >= 2
+        || rewriteSegmentFileCount > 0
+        || rewritePosSegmentFileCount > 0;
   }
 
   /**
@@ -421,14 +492,10 @@ public class CommonPartitionEvaluator implements PartitionEvaluator {
   }
 
   public boolean isFullNecessary() {
-    if (!reachFullInterval()) {
+    if (forcedOptimizingType != OptimizingType.FULL && !reachFullInterval()) {
       return false;
     }
-    return anyDeleteExist()
-        || fragmentFileCount >= 2
-        || undersizedSegmentFileCount >= 2
-        || rewriteSegmentFileCount > 0
-        || rewritePosSegmentFileCount > 0;
+    return isFullInputPresent();
   }
 
   protected String name() {

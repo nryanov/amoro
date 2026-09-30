@@ -216,6 +216,16 @@ export function getUpgradeProperties() {
   return request.get('api/ams/v1/upgrade/properties')
 }
 
+export function triggerOptimizing(
+  { catalog = '' as string, db = '' as string, table = '' as string, type = '' as string },
+) {
+  return request.post(
+    `api/ams/v1/tables/catalogs/${catalog}/dbs/${db}/tables/${table}/optimizing`,
+    { type },
+    { handleError: false },
+  )
+}
+
 export function cancelOptimizingProcess(
   { catalog = '' as string, db = '' as string, table = '' as string, processId = '' as string },
 ) {

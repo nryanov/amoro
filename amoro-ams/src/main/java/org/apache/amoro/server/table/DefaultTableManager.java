@@ -22,6 +22,7 @@ import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import org.apache.amoro.ServerTableIdentifier;
+import org.apache.amoro.TableRuntime;
 import org.apache.amoro.api.BlockableOperation;
 import org.apache.amoro.api.Blocker;
 import org.apache.amoro.api.TableIdentifier;
@@ -87,6 +88,11 @@ public class DefaultTableManager extends PersistentBase implements TableManager 
   @Override
   public void setTableService(@Nullable TableService tableService) {
     this.tableService = tableService;
+  }
+
+  @Override
+  public TableRuntime getTableRuntime(long tableId) {
+    return tableService().map(service -> service.getRuntime(tableId)).orElse(null);
   }
 
   private Optional<TableService> tableService() {

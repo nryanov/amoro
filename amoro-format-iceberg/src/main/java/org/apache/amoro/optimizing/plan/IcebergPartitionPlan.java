@@ -21,6 +21,7 @@ package org.apache.amoro.optimizing.plan;
 import org.apache.amoro.ServerTableIdentifier;
 import org.apache.amoro.config.OptimizingConfig;
 import org.apache.amoro.optimizing.IcebergRewriteExecutorFactory;
+import org.apache.amoro.optimizing.OptimizingType;
 import org.apache.amoro.optimizing.TaskProperties;
 import org.apache.amoro.shade.guava32.com.google.common.collect.Maps;
 import org.apache.amoro.table.MixedTable;
@@ -42,6 +43,28 @@ public class IcebergPartitionPlan extends AbstractPartitionPlan {
       long lastMinorOptimizingTime,
       long lastFullOptimizingTime,
       long lastMajorOptimizingTime) {
+    this(
+        identifier,
+        config,
+        table,
+        partition,
+        planTime,
+        lastMinorOptimizingTime,
+        lastFullOptimizingTime,
+        lastMajorOptimizingTime,
+        null);
+  }
+
+  public IcebergPartitionPlan(
+      ServerTableIdentifier identifier,
+      OptimizingConfig config,
+      MixedTable table,
+      Pair<Integer, StructLike> partition,
+      long planTime,
+      long lastMinorOptimizingTime,
+      long lastFullOptimizingTime,
+      long lastMajorOptimizingTime,
+      OptimizingType forcedOptimizingType) {
     super(
         identifier,
         table,
@@ -50,7 +73,8 @@ public class IcebergPartitionPlan extends AbstractPartitionPlan {
         planTime,
         lastMinorOptimizingTime,
         lastFullOptimizingTime,
-        lastMajorOptimizingTime);
+        lastMajorOptimizingTime,
+        forcedOptimizingType);
   }
 
   @Override

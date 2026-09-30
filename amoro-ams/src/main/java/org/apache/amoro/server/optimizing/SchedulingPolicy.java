@@ -109,19 +109,41 @@ public class SchedulingPolicy {
   private void fillSkipSet(Set<ServerTableIdentifier> originalSet) {
     long currentTime = System.currentTimeMillis();
     tableRuntimeMap.values().stream()
-        .filter(
-            tableRuntime ->
-                !isTablePending(tableRuntime)
-                    || currentTime - tableRuntime.getLastPlanTime()
-                        < tableRuntime.getOptimizingConfig().getMinPlanInterval())
+        .filter(tableRuntime -> shouldSkip(tableRuntime, currentTime))
         .forEach(tableRuntime -> originalSet.add(tableRuntime.getTableIdentifier()));
   }
 
+  /**
+   * A manual pending request is eligible without a snapshot change. Its first attempt also skips
+   * the min plan interval. After a failed plan, {@code lastPlanTime} moves past the request time
+   * and the interval applies again.
+   */
+  private boolean shouldSkip(DefaultTableRuntime tableRuntime, long currentTime) {
+    if (!isTablePending(tableRuntime)) {
+      return true;
+    }
+    if (isManualFirstAttempt(tableRuntime)) {
+      return false;
+    }
+    return currentTime - tableRuntime.getLastPlanTime()
+        < tableRuntime.getOptimizingConfig().getMinPlanInterval();
+  }
+
+  private boolean isManualFirstAttempt(DefaultTableRuntime tableRuntime) {
+    return tableRuntime.getManualOptimizingType() != null
+        && tableRuntime.getManualRequestedAt() >= tableRuntime.getLastPlanTime();
+  }
+
   private boolean isTablePending(DefaultTableRuntime tableRuntime) {
-    return tableRuntime.getOptimizingStatus() == OptimizingStatus.PENDING
-        && (tableRuntime.getLastOptimizedSnapshotId() != tableRuntime.getCurrentSnapshotId()
-            || tableRuntime.getLastOptimizedChangeSnapshotId()
-                != tableRuntime.getCurrentChangeSnapshotId());
+    if (tableRuntime.getOptimizingStatus() != OptimizingStatus.PENDING) {
+      return false;
+    }
+    if (tableRuntime.getManualOptimizingType() != null) {
+      return true;
+    }
+    return tableRuntime.getLastOptimizedSnapshotId() != tableRuntime.getCurrentSnapshotId()
+        || tableRuntime.getLastOptimizedChangeSnapshotId()
+            != tableRuntime.getCurrentChangeSnapshotId();
   }
 
   public void addTable(DefaultTableRuntime tableRuntime) {

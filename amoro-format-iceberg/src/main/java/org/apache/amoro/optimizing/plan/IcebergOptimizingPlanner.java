@@ -20,6 +20,7 @@ package org.apache.amoro.optimizing.plan;
 
 import org.apache.amoro.ServerTableIdentifier;
 import org.apache.amoro.config.OptimizingConfig;
+import org.apache.amoro.optimizing.OptimizingType;
 import org.apache.amoro.table.MixedTable;
 import org.apache.amoro.table.TableSnapshot;
 import org.apache.iceberg.StructLike;
@@ -39,6 +40,34 @@ public class IcebergOptimizingPlanner extends AbstractOptimizingPlanner {
       long lastMinorOptimizingTime,
       long lastFullOptimizingTime,
       long lastMajorOptimizingTime) {
+    this(
+        identifier,
+        config,
+        table,
+        snapshot,
+        partitionFilter,
+        processId,
+        availableCore,
+        maxInputSizePerThread,
+        lastMinorOptimizingTime,
+        lastFullOptimizingTime,
+        lastMajorOptimizingTime,
+        null);
+  }
+
+  public IcebergOptimizingPlanner(
+      ServerTableIdentifier identifier,
+      OptimizingConfig config,
+      MixedTable table,
+      TableSnapshot snapshot,
+      Expression partitionFilter,
+      long processId,
+      double availableCore,
+      long maxInputSizePerThread,
+      long lastMinorOptimizingTime,
+      long lastFullOptimizingTime,
+      long lastMajorOptimizingTime,
+      OptimizingType forcedOptimizingType) {
     super(
         identifier,
         config,
@@ -50,7 +79,8 @@ public class IcebergOptimizingPlanner extends AbstractOptimizingPlanner {
         maxInputSizePerThread,
         lastMinorOptimizingTime,
         lastFullOptimizingTime,
-        lastMajorOptimizingTime);
+        lastMajorOptimizingTime,
+        forcedOptimizingType);
   }
 
   @Override
@@ -63,6 +93,7 @@ public class IcebergOptimizingPlanner extends AbstractOptimizingPlanner {
         planTime,
         lastMinorOptimizingTime,
         lastFullOptimizingTime,
-        lastMajorOptimizingTime);
+        lastMajorOptimizingTime,
+        forcedOptimizingType);
   }
 }

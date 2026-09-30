@@ -23,7 +23,7 @@ import { useRoute } from 'vue-router'
 import { Modal, message } from 'ant-design-vue'
 import { usePagination } from '@/hooks/usePagination'
 import type { BreadcrumbOptimizingItem, IColumns, ILableAndValue } from '@/types/common.type'
-import { cancelOptimizingProcess, getOptimizingProcesses, getTableProcessTypes, getTasksByOptimizingProcessId } from '@/services/table.service'
+import { cancelOptimizingProcess, getOptimizingProcesses, getTableDetail, getTableProcessTypes, getTasksByOptimizingProcessId, triggerOptimizing } from '@/services/table.service'
 import { bytesToSize, dateFormat, formatMS2Time } from '@/utils/index'
 import { canManageTable } from '@/utils/permission'
 
@@ -95,6 +95,10 @@ const breadcrumbDataSource = reactive<BreadcrumbOptimizingItem[]>([])
 const loading = ref<boolean>(false)
 const cancelDisabled = ref(true)
 const writable = ref<boolean>(canManageTable())
+const showCompactionActions = ref(false)
+const compactionDisabled = ref(true)
+const triggeringCompaction = ref(false)
+const idleOrPendingStatuses = ['idle', 'pending']
 const pagination = reactive(usePagination())
 const breadcrumbPagination = reactive(usePagination())
 const route = useRoute()
@@ -253,10 +257,64 @@ function toggleBreadcrumb(rowProcessId: number, status: string) {
   refresh()
 }
 
+async function loadCompactionAvailability() {
+  if (props.processCategory !== 'OPTIMIZING' || !writable.value) {
+    showCompactionActions.value = false
+    return
+  }
+  try {
+    const detail = await getTableDetail({ ...sourceData })
+    const enabledProp = detail?.properties?.['self-optimizing.enabled']
+    const optimizingEnabled = enabledProp == null || String(enabledProp).toLowerCase() !== 'false'
+    const status = String(detail?.tableSummary?.optimizingStatus || '').toLowerCase()
+    showCompactionActions.value = detail?.tableType === 'ICEBERG' && optimizingEnabled
+    compactionDisabled.value = !idleOrPendingStatuses.includes(status)
+  }
+  catch (error) {
+    showCompactionActions.value = false
+  }
+}
+
+async function submitCompaction(type: 'MINOR' | 'MAJOR' | 'FULL') {
+  try {
+    triggeringCompaction.value = true
+    compactionDisabled.value = true
+    await triggerOptimizing({
+      catalog: String(sourceData.catalog || ''),
+      db: String(sourceData.db || ''),
+      table: String(sourceData.table || ''),
+      type,
+    })
+    message.success(t('triggerCompactionAccepted'))
+    await refreshOptimizingProcesses()
+  }
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (error as Error)?.message || t('fail'))
+  }
+  finally {
+    triggeringCompaction.value = false
+    await loadCompactionAvailability()
+  }
+}
+
+function triggerCompaction(type: 'MINOR' | 'MAJOR' | 'FULL') {
+  if (type === 'FULL') {
+    Modal.confirm({
+      title: t('triggerFullCompactionTitle'),
+      content: t('triggerFullCompactionContent'),
+      onOk: () => submitCompaction(type),
+    })
+    return
+  }
+  submitCompaction(type)
+}
+
 onMounted(() => {
   hasBreadcrumb.value = false
   refresh()
   getQueryDataDictList()
+  loadCompactionAvailability()
 })
 </script>
 
@@ -272,6 +330,17 @@ onMounted(() => {
           v-model:value="statusType" allow-clear :placeholder="t('status')" :options="statusTypeList"
           style="min-width: 150px;" @change="refresh"
         />
+        <template v-if="showCompactionActions">
+          <a-button :disabled="compactionDisabled || triggeringCompaction" @click="triggerCompaction('MINOR')">
+            {{ t('minorCompaction') }}
+          </a-button>
+          <a-button :disabled="compactionDisabled || triggeringCompaction" @click="triggerCompaction('MAJOR')">
+            {{ t('majorCompaction') }}
+          </a-button>
+          <a-button :disabled="compactionDisabled || triggeringCompaction" @click="triggerCompaction('FULL')">
+            {{ t('fullCompaction') }}
+          </a-button>
+        </template>
       </a-space>
       <a-table
         row-key="processId" :columns="columns" :data-source="dataSource" :pagination="pagination"

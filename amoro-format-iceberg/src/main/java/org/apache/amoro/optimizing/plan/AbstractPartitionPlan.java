@@ -58,6 +58,7 @@ public abstract class AbstractPartitionPlan implements PartitionEvaluator {
   private Long fromSequence = null;
   private Long toSequence = null;
   protected final long planTime;
+  private final OptimizingType forcedOptimizingType;
 
   protected final Map<DataFile, List<ContentFile<?>>> rewriteDataFiles = Maps.newHashMap();
 
@@ -85,6 +86,28 @@ public abstract class AbstractPartitionPlan implements PartitionEvaluator {
       long lastMinorOptimizingTime,
       long lastFullOptimizingTime,
       long lastMajorOptimizingTime) {
+    this(
+        identifier,
+        table,
+        config,
+        partition,
+        planTime,
+        lastMinorOptimizingTime,
+        lastFullOptimizingTime,
+        lastMajorOptimizingTime,
+        null);
+  }
+
+  public AbstractPartitionPlan(
+      ServerTableIdentifier identifier,
+      MixedTable table,
+      OptimizingConfig config,
+      Pair<Integer, StructLike> partition,
+      long planTime,
+      long lastMinorOptimizingTime,
+      long lastFullOptimizingTime,
+      long lastMajorOptimizingTime,
+      OptimizingType forcedOptimizingType) {
     this.identifier = identifier;
     this.partition = partition;
     this.tableObject = table;
@@ -93,6 +116,7 @@ public abstract class AbstractPartitionPlan implements PartitionEvaluator {
     this.lastMinorOptimizingTime = lastMinorOptimizingTime;
     this.lastFullOptimizingTime = lastFullOptimizingTime;
     this.lastMajorOptimizingTime = lastMajorOptimizingTime;
+    this.forcedOptimizingType = forcedOptimizingType;
   }
 
   @Override
@@ -115,7 +139,8 @@ public abstract class AbstractPartitionPlan implements PartitionEvaluator {
         planTime,
         lastMinorOptimizingTime,
         lastFullOptimizingTime,
-        lastMajorOptimizingTime);
+        lastMajorOptimizingTime,
+        forcedOptimizingType);
   }
 
   @Override
@@ -372,15 +397,26 @@ public abstract class AbstractPartitionPlan implements PartitionEvaluator {
     public List<SplitTask> splitTasks(int targetTaskCount) {
       List<SplitTask> results = Lists.newArrayList();
       List<FileTask> fileTasks = Lists.newArrayList();
-      // bin-packing for undersized segment files
-      undersizedSegmentFiles.forEach(
-          (dataFile, deleteFiles) -> fileTasks.add(new FileTask(dataFile, deleteFiles, true)));
-      for (SplitTask splitTask : genSplitTasks(fileTasks)) {
-        if (splitTask.getRewriteDataFiles().size() > 1) {
-          results.add(splitTask);
-          continue;
+      if (forcedOptimizingType == OptimizingType.MINOR) {
+        // Minor compaction converts deletes on undersized segments. It does not merge them.
+        undersizedSegmentFiles.forEach(
+            (dataFile, deleteFiles) ->
+                disposeUndersizedSegmentFile(
+                    new SplitTask(
+                        Sets.newHashSet(dataFile),
+                        Sets.newHashSet(),
+                        Sets.newHashSet(deleteFiles))));
+      } else {
+        // bin-packing for undersized segment files
+        undersizedSegmentFiles.forEach(
+            (dataFile, deleteFiles) -> fileTasks.add(new FileTask(dataFile, deleteFiles, true)));
+        for (SplitTask splitTask : genSplitTasks(fileTasks)) {
+          if (splitTask.getRewriteDataFiles().size() > 1) {
+            results.add(splitTask);
+            continue;
+          }
+          disposeUndersizedSegmentFile(splitTask);
         }
-        disposeUndersizedSegmentFile(splitTask);
       }
 
       // bin-packing for fragment file and rewrite pos data file

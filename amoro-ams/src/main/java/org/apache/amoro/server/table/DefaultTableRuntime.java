@@ -22,6 +22,7 @@ import org.apache.amoro.AmoroTable;
 import org.apache.amoro.api.BlockableOperation;
 import org.apache.amoro.config.OptimizingConfig;
 import org.apache.amoro.config.TableConfiguration;
+import org.apache.amoro.exception.BadRequestException;
 import org.apache.amoro.iceberg.Constants;
 import org.apache.amoro.metrics.MetricRegistry;
 import org.apache.amoro.optimizing.OptimizingType;
@@ -175,6 +176,19 @@ public class DefaultTableRuntime extends AbstractTableRuntime {
     return store().getState(OPTIMIZING_STATE_KEY).getLastMinorOptimizingTime();
   }
 
+  /** Stored one-shot compaction type, or null when the table has no manual request. */
+  public OptimizingType getManualOptimizingType() {
+    String type = store().getState(OPTIMIZING_STATE_KEY).getManualOptimizingType();
+    if (type == null || type.isEmpty()) {
+      return null;
+    }
+    return OptimizingType.valueOf(type);
+  }
+
+  public long getManualRequestedAt() {
+    return store().getState(OPTIMIZING_STATE_KEY).getManualRequestedAt();
+  }
+
   public long getLastOptimizedChangeSnapshotId() {
     return store().getState(OPTIMIZING_STATE_KEY).getLastOptimizedChangeSnapshotId();
   }
@@ -314,6 +328,65 @@ public class DefaultTableRuntime extends AbstractTableRuntime {
     return this;
   }
 
+  /**
+   * Queue a one-shot compaction of {@code type}. Replaces an automatic pending evaluation. The
+   * table must already have self-optimizing enabled and be idle or pending.
+   */
+  public void requestManualOptimizing(OptimizingType type) {
+    if (type == null) {
+      throw new BadRequestException("Optimizing type must be MINOR, MAJOR, or FULL");
+    }
+    if (!getOptimizingConfig().isEnabled()) {
+      throw new BadRequestException("Self-optimizing is disabled for this table");
+    }
+    OptimizingStatus status = getOptimizingStatus();
+    if (status != OptimizingStatus.IDLE && status != OptimizingStatus.PENDING) {
+      throw new BadRequestException(
+          "Cannot trigger optimizing while table status is "
+              + (status == null ? "unknown" : status.displayValue()));
+    }
+    if (isBlocked(BlockableOperation.OPTIMIZE)) {
+      throw new BadRequestException("Optimizing is blocked for this table");
+    }
+    long requestedAt = System.currentTimeMillis();
+    store()
+        .begin()
+        .updateState(
+            OPTIMIZING_STATE_KEY,
+            state -> {
+              state.setManualOptimizingType(type.name());
+              state.setManualRequestedAt(requestedAt);
+              return state;
+            })
+        .updateState(PENDING_INPUT_KEY, ignored -> new AbstractOptimizingEvaluator.PendingInput())
+        .updateStatusCode(code -> OptimizingStatus.PENDING.getCode())
+        .commit();
+  }
+
+  /**
+   * Drops a stored manual request. A pending or planning table returns to idle so the scheduler
+   * does not keep a request that optimizing can no longer run.
+   */
+  public void clearManualOptimizingRequest() {
+    if (getManualOptimizingType() == null) {
+      return;
+    }
+    OptimizingStatus status = getOptimizingStatus();
+    if (status == OptimizingStatus.PENDING || status == OptimizingStatus.PLANNING) {
+      completeEmptyProcess();
+      return;
+    }
+    store()
+        .begin()
+        .updateState(
+            OPTIMIZING_STATE_KEY,
+            state -> {
+              state.clearManualOptimizing();
+              return state;
+            })
+        .commit();
+  }
+
   public void beginPlanning() {
     OptimizingStatus originalStatus = getOptimizingStatus();
     store().begin().updateStatusCode(code -> OptimizingStatus.PLANNING.getCode()).commit();
@@ -335,6 +408,12 @@ public class DefaultTableRuntime extends AbstractTableRuntime {
             code ->
                 OptimizingStatus.ofOptimizingType(optimizingProcess.getOptimizingType()).getCode())
         .updateState(PENDING_INPUT_KEY, any -> new AbstractOptimizingEvaluator.PendingInput())
+        .updateState(
+            OPTIMIZING_STATE_KEY,
+            state -> {
+              state.clearManualOptimizing();
+              return state;
+            })
         .commit();
   }
 
@@ -386,6 +465,7 @@ public class DefaultTableRuntime extends AbstractTableRuntime {
             state -> {
               state.setLastOptimizedSnapshotId(state.getCurrentSnapshotId());
               state.setLastOptimizedChangeSnapshotId(state.getCurrentChangeSnapshotId());
+              state.clearManualOptimizing();
               return state;
             })
         .updateState(PENDING_INPUT_KEY, any -> new AbstractOptimizingEvaluator.PendingInput())

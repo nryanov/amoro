@@ -51,6 +51,7 @@ public abstract class AbstractOptimizingPlanner extends AbstractOptimizingEvalua
   private final double availableCore;
   protected final long planTime;
   private OptimizingType optimizingType;
+  protected final OptimizingType forcedOptimizingType;
   private List<RewriteStageTask> tasks;
   private List<AbstractPartitionPlan> actualPartitionPlans;
   private final long maxInputSizePerThread;
@@ -67,6 +68,34 @@ public abstract class AbstractOptimizingPlanner extends AbstractOptimizingEvalua
       long lastMinorOptimizingTime,
       long lastFullOptimizingTime,
       long lastMajorOptimizingTime) {
+    this(
+        identifier,
+        config,
+        table,
+        snapshot,
+        partitionFilter,
+        processId,
+        availableCore,
+        maxInputSizePerThread,
+        lastMinorOptimizingTime,
+        lastFullOptimizingTime,
+        lastMajorOptimizingTime,
+        null);
+  }
+
+  public AbstractOptimizingPlanner(
+      ServerTableIdentifier identifier,
+      OptimizingConfig config,
+      MixedTable table,
+      TableSnapshot snapshot,
+      Expression partitionFilter,
+      long processId,
+      double availableCore,
+      long maxInputSizePerThread,
+      long lastMinorOptimizingTime,
+      long lastFullOptimizingTime,
+      long lastMajorOptimizingTime,
+      OptimizingType forcedOptimizingType) {
     super(
         identifier,
         config,
@@ -81,6 +110,7 @@ public abstract class AbstractOptimizingPlanner extends AbstractOptimizingEvalua
     this.planTime = System.currentTimeMillis();
     this.processId = processId;
     this.maxInputSizePerThread = maxInputSizePerThread;
+    this.forcedOptimizingType = forcedOptimizingType;
   }
 
   public Map<String, Long> getFromSequence() {
@@ -180,7 +210,9 @@ public abstract class AbstractOptimizingPlanner extends AbstractOptimizingEvalua
     }
 
     if (!plannedTasks.isEmpty()) {
-      if (actualPartitionPlans.stream()
+      if (forcedOptimizingType != null) {
+        optimizingType = forcedOptimizingType;
+      } else if (actualPartitionPlans.stream()
           .anyMatch(plan -> plan.getOptimizingType() == OptimizingType.FULL)) {
         optimizingType = OptimizingType.FULL;
       } else if (actualPartitionPlans.stream()

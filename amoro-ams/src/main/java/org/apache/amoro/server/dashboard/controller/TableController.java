@@ -24,6 +24,7 @@ import io.javalin.http.Context;
 import org.apache.amoro.Constants;
 import org.apache.amoro.ServerTableIdentifier;
 import org.apache.amoro.TableFormat;
+import org.apache.amoro.TableRuntime;
 import org.apache.amoro.api.CatalogMeta;
 import org.apache.amoro.api.OptimizingService;
 import org.apache.amoro.client.OptimizingClientPools;
@@ -35,6 +36,7 @@ import org.apache.amoro.hive.catalog.MixedHiveCatalog;
 import org.apache.amoro.hive.utils.HiveTableUtil;
 import org.apache.amoro.hive.utils.UpgradeHiveTableUtil;
 import org.apache.amoro.mixed.CatalogLoader;
+import org.apache.amoro.optimizing.OptimizingType;
 import org.apache.amoro.process.ProcessStatus;
 import org.apache.amoro.properties.CatalogMetaProperties;
 import org.apache.amoro.properties.HiveTableProperties;
@@ -55,6 +57,7 @@ import org.apache.amoro.server.dashboard.utils.CommonUtil;
 import org.apache.amoro.server.optimizing.OptimizingStatus;
 import org.apache.amoro.server.persistence.TableRuntimeMeta;
 import org.apache.amoro.server.process.TableProcessMeta;
+import org.apache.amoro.server.table.DefaultTableRuntime;
 import org.apache.amoro.server.table.TableManager;
 import org.apache.amoro.shade.guava32.com.google.common.base.Function;
 import org.apache.amoro.shade.guava32.com.google.common.base.Preconditions;
@@ -92,6 +95,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -748,6 +752,56 @@ public class TableController {
     int offset = (page - 1) * pageSize;
     PageResult<ConsumerInfo> amsPageResult = PageResult.of(consumerInfos, offset, pageSize);
     ctx.json(OkResponse.of(amsPageResult));
+  }
+
+  /**
+   * Queue a one-shot minor, major, or full compaction for an Iceberg table.
+   *
+   * @param ctx - context for handling the request and response
+   */
+  public void triggerOptimizing(Context ctx) {
+    String catalog = ctx.pathParam("catalog");
+    String db = ctx.pathParam("db");
+    String table = ctx.pathParam("table");
+    Preconditions.checkArgument(
+        StringUtils.isNotBlank(catalog)
+            && StringUtils.isNotBlank(db)
+            && StringUtils.isNotBlank(table),
+        "catalog.database.tableName can not be empty in any element");
+    Preconditions.checkState(catalogManager.catalogExist(catalog), "invalid catalog!");
+
+    Map<String, Object> body = ctx.bodyAsClass(Map.class);
+    Object rawType = body == null ? null : body.get("type");
+    if (rawType == null || StringUtils.isBlank(rawType.toString())) {
+      throw new BadRequestException("Optimizing type must be MINOR, MAJOR, or FULL");
+    }
+    OptimizingType optimizingType;
+    try {
+      optimizingType = OptimizingType.valueOf(rawType.toString().trim().toUpperCase(Locale.ROOT));
+    } catch (IllegalArgumentException e) {
+      throw new BadRequestException("Optimizing type must be MINOR, MAJOR, or FULL");
+    }
+
+    ServerTableIdentifier serverTableIdentifier =
+        tableManager.getServerTableIdentifier(
+            TableIdentifier.of(catalog, db, table).buildTableIdentifier());
+    if (serverTableIdentifier == null) {
+      throw new BadRequestException("Table not found");
+    }
+    if (serverTableIdentifier.getFormat() != TableFormat.ICEBERG) {
+      throw new BadRequestException("Manual compaction is only supported for Iceberg tables");
+    }
+    TableRuntime runtime = tableManager.getTableRuntime(serverTableIdentifier.getId());
+    if (!(runtime instanceof DefaultTableRuntime)) {
+      throw new BadRequestException("Table runtime is not loaded on this AMS node");
+    }
+    DefaultTableRuntime tableRuntime = (DefaultTableRuntime) runtime;
+    tableRuntime.requestManualOptimizing(optimizingType);
+
+    Map<String, String> result = new HashMap<>();
+    result.put("type", optimizingType.name());
+    result.put("status", tableRuntime.getOptimizingStatus().displayValue());
+    ctx.json(OkResponse.of(result));
   }
 
   /**

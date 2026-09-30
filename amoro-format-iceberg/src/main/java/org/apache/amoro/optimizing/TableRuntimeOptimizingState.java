@@ -29,6 +29,11 @@ public class TableRuntimeOptimizingState {
   private long lastFullOptimizingTime;
   private long lastMinorOptimizingTime;
 
+  /** One-shot manual compaction type, or null when no manual request is stored. */
+  private String manualOptimizingType;
+
+  private long manualRequestedAt;
+
   public long getCurrentSnapshotId() {
     return currentSnapshotId;
   }
@@ -83,5 +88,26 @@ public class TableRuntimeOptimizingState {
 
   public void setLastMinorOptimizingTime(long lastMinorOptimizingTime) {
     this.lastMinorOptimizingTime = lastMinorOptimizingTime;
+  }
+
+  public String getManualOptimizingType() {
+    return manualOptimizingType;
+  }
+
+  public void setManualOptimizingType(String manualOptimizingType) {
+    this.manualOptimizingType = manualOptimizingType;
+  }
+
+  public long getManualRequestedAt() {
+    return manualRequestedAt;
+  }
+
+  public void setManualRequestedAt(long manualRequestedAt) {
+    this.manualRequestedAt = manualRequestedAt;
+  }
+
+  public void clearManualOptimizing() {
+    this.manualOptimizingType = null;
+    this.manualRequestedAt = 0L;
   }
 }

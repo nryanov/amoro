@@ -18,11 +18,22 @@
 
 package org.apache.amoro.server.table;
 
+import org.apache.amoro.TableRuntime;
 import org.apache.amoro.server.table.blocker.TableBlockerManager;
 import org.apache.amoro.server.table.internal.InternalTableManager;
+
+import javax.annotation.Nullable;
 
 public interface TableManager
     extends MaintainedTableManager, InternalTableManager, TableBlockerManager {
 
   void setTableService(TableService service);
+
+  /**
+   * Runtime loaded in memory on this AMS node.
+   *
+   * @return null when this node does not own the table
+   */
+  @Nullable
+  TableRuntime getTableRuntime(long tableId);
 }

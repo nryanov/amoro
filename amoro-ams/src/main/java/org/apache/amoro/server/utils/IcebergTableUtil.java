@@ -26,6 +26,7 @@ import org.apache.amoro.config.OptimizingConfig;
 import org.apache.amoro.hive.optimizing.plan.MixedHiveOptimizingEvaluator;
 import org.apache.amoro.hive.optimizing.plan.MixedHiveOptimizingPlanner;
 import org.apache.amoro.iceberg.Constants;
+import org.apache.amoro.optimizing.OptimizingType;
 import org.apache.amoro.optimizing.plan.AbstractOptimizingEvaluator;
 import org.apache.amoro.optimizing.plan.AbstractOptimizingPlanner;
 import org.apache.amoro.optimizing.plan.IcebergOptimizerEvaluator;
@@ -291,6 +292,7 @@ public class IcebergTableUtil {
     long lastMajor = tableRuntime.getLastMajorOptimizingTime();
     TableSnapshot snapshot = IcebergTableUtil.getSnapshot(table, tableRuntime);
     if (TableFormat.ICEBERG.equals(table.format())) {
+      OptimizingType forcedType = tableRuntime.getManualOptimizingType();
       return new IcebergOptimizingPlanner(
           identifier,
           config,
@@ -302,7 +304,8 @@ public class IcebergTableUtil {
           maxInputSizePerThread,
           lastMinor,
           lastFull,
-          lastMajor);
+          lastMajor,
+          forcedType);
     } else if (TableFormat.MIXED_ICEBERG.equals(table.format())) {
       return new MixedIcebergOptimizingPlanner(
           identifier,
