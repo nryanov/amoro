@@ -33,6 +33,7 @@ import org.apache.amoro.process.RecoverProcessFailedException;
 import org.apache.amoro.process.TableProcess;
 import org.apache.amoro.process.TableProcessStore;
 import org.apache.amoro.server.table.DefaultTableRuntime;
+import org.apache.amoro.server.table.cleanup.TableRuntimeCleanupState;
 import org.apache.amoro.shade.guava32.com.google.common.collect.Lists;
 import org.apache.amoro.shade.guava32.com.google.common.collect.Maps;
 import org.apache.commons.lang3.tuple.Pair;
@@ -220,14 +221,14 @@ public class IcebergProcessFactory implements ProcessFactory {
   }
 
   private Optional<TableProcess> triggerExpireSnapshot(TableRuntime tableRuntime) {
-    if (localEngine == null || !tableRuntime.getTableConfiguration().isExpireSnapshotEnabled()) {
+    if (localEngine == null) {
       return Optional.empty();
     }
-
-    long lastExecuteTime =
-        tableRuntime.getState(DefaultTableRuntime.CLEANUP_STATE_KEY).getLastSnapshotsExpiringTime();
-    ProcessTriggerStrategy strategy = actions.get(IcebergActions.EXPIRE_SNAPSHOTS);
-    if (System.currentTimeMillis() - lastExecuteTime < strategy.getTriggerInterval().toMillis()) {
+    if (!readyToRun(
+        tableRuntime,
+        IcebergActions.EXPIRE_SNAPSHOTS,
+        tableRuntime.getTableConfiguration().isExpireSnapshotEnabled(),
+        cleanupState(tableRuntime).getLastSnapshotsExpiringTime())) {
       return Optional.empty();
     }
 
@@ -235,14 +236,14 @@ public class IcebergProcessFactory implements ProcessFactory {
   }
 
   private Optional<TableProcess> triggerCleanOrphans(TableRuntime tableRuntime) {
-    if (localEngine == null || !tableRuntime.getTableConfiguration().isCleanOrphanEnabled()) {
+    if (localEngine == null) {
       return Optional.empty();
     }
-
-    long lastExecuteTime =
-        tableRuntime.getState(DefaultTableRuntime.CLEANUP_STATE_KEY).getLastOrphanFilesCleanTime();
-    ProcessTriggerStrategy strategy = actions.get(IcebergActions.CLEAN_ORPHAN);
-    if (System.currentTimeMillis() - lastExecuteTime < strategy.getTriggerInterval().toMillis()) {
+    if (!readyToRun(
+        tableRuntime,
+        IcebergActions.CLEAN_ORPHAN,
+        tableRuntime.getTableConfiguration().isCleanOrphanEnabled(),
+        cleanupState(tableRuntime).getLastOrphanFilesCleanTime())) {
       return Optional.empty();
     }
 
@@ -250,17 +251,14 @@ public class IcebergProcessFactory implements ProcessFactory {
   }
 
   private Optional<TableProcess> triggerCleanDanglingDelete(TableRuntime tableRuntime) {
-    if (localEngine == null
-        || !tableRuntime.getTableConfiguration().isDeleteDanglingDeleteFilesEnabled()) {
+    if (localEngine == null) {
       return Optional.empty();
     }
-
-    long lastExecuteTime =
-        tableRuntime
-            .getState(DefaultTableRuntime.CLEANUP_STATE_KEY)
-            .getLastDanglingDeleteFilesCleanTime();
-    ProcessTriggerStrategy strategy = actions.get(IcebergActions.CLEAN_DANGLING_DELETE);
-    if (System.currentTimeMillis() - lastExecuteTime < strategy.getTriggerInterval().toMillis()) {
+    if (!readyToRun(
+        tableRuntime,
+        IcebergActions.CLEAN_DANGLING_DELETE,
+        tableRuntime.getTableConfiguration().isDeleteDanglingDeleteFilesEnabled(),
+        cleanupState(tableRuntime).getLastDanglingDeleteFilesCleanTime())) {
       return Optional.empty();
     }
 
@@ -268,19 +266,52 @@ public class IcebergProcessFactory implements ProcessFactory {
   }
 
   private Optional<TableProcess> triggerDataExpiring(TableRuntime tableRuntime) {
-    if (localEngine == null
-        || !tableRuntime.getTableConfiguration().getExpiringDataConfig().isEnabled()) {
+    if (localEngine == null) {
       return Optional.empty();
     }
-
-    long lastExecuteTime =
-        tableRuntime.getState(DefaultTableRuntime.CLEANUP_STATE_KEY).getLastDataExpiringTime();
-    ProcessTriggerStrategy strategy = actions.get(IcebergActions.EXPIRE_DATA);
-    if (System.currentTimeMillis() - lastExecuteTime < strategy.getTriggerInterval().toMillis()) {
+    if (!readyToRun(
+        tableRuntime,
+        IcebergActions.EXPIRE_DATA,
+        tableRuntime.getTableConfiguration().getExpiringDataConfig().isEnabled(),
+        cleanupState(tableRuntime).getLastDataExpiringTime())) {
       return Optional.empty();
     }
 
     return Optional.of(new DataExpiringProcess(tableRuntime, localEngine));
+  }
+
+  /**
+   * A pending manual request skips the interval. A disabled action drops that request so it cannot
+   * run after the table property is turned back on.
+   */
+  private boolean readyToRun(
+      TableRuntime tableRuntime, Action action, boolean enabled, long lastExecuteTime) {
+    if (localEngine == null) {
+      return false;
+    }
+    boolean manual = hasManualCleanup(tableRuntime, action);
+    if (!enabled) {
+      if (manual) {
+        tableRuntime.updateState(
+            DefaultTableRuntime.CLEANUP_STATE_KEY,
+            state -> state.clearManualAction(action.getName()));
+      }
+      return false;
+    }
+    if (manual) {
+      return true;
+    }
+    ProcessTriggerStrategy strategy = actions.get(action);
+    return System.currentTimeMillis() - lastExecuteTime >= strategy.getTriggerInterval().toMillis();
+  }
+
+  private TableRuntimeCleanupState cleanupState(TableRuntime tableRuntime) {
+    TableRuntimeCleanupState state = tableRuntime.getState(DefaultTableRuntime.CLEANUP_STATE_KEY);
+    return state == null ? new TableRuntimeCleanupState() : state;
+  }
+
+  private boolean hasManualCleanup(TableRuntime tableRuntime, Action action) {
+    return cleanupState(tableRuntime).hasManualAction(action.getName());
   }
 
   private Optional<TableProcess> triggerAutoCreateTag(TableRuntime tableRuntime) {

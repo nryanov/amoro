@@ -272,6 +272,18 @@ export default [
     }),
   },
   {
+    url: '/mock/api/ams/v1/tables/catalogs/:catalog/dbs/:db/tables/:table/cleanup',
+    method: 'post',
+    response: ({ body }) => ({
+      message: 'success',
+      code: 200,
+      result: {
+        type: body?.type || 'expire-snapshots',
+        status: 'accepted',
+      },
+    }),
+  },
+  {
     url: '/mock/api/ams/v1/tables/catalogs/test_catalog/dbs/db/tables/user/optimizing-processes',
     method: 'get',
     response: () => ({

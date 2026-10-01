@@ -54,6 +54,9 @@ public class DanglingDeleteFilesCleaningProcess extends TableProcess implements 
   @Override
   public void run() {
     try {
+      tableRuntime.updateState(
+          DefaultTableRuntime.CLEANUP_STATE_KEY,
+          state -> state.clearManualAction(getAction().getName()));
       AmoroTable<?> amoroTable = tableRuntime.loadTable();
       TableMaintainer tableMaintainer = TableMaintainerFactory.create(amoroTable, tableRuntime);
       summary = tableMaintainer.cleanDanglingDeleteFiles();

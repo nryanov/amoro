@@ -18,6 +18,9 @@
 
 package org.apache.amoro.server.process.iceberg;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 
@@ -44,6 +47,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 public class TestIcebergProcessFactory {
 
@@ -86,6 +90,29 @@ public class TestIcebergProcessFactory {
         IcebergActions.CLEAN_DANGLING_DELETE,
         System.currentTimeMillis());
     assertTriggerNotDue("expire-data", IcebergActions.EXPIRE_DATA, System.currentTimeMillis());
+  }
+
+  @Test
+  public void testManualRequestBypassesInterval() {
+    assertManualBypassesInterval(
+        "expire-snapshots", IcebergActions.EXPIRE_SNAPSHOTS, SnapshotsExpiringProcess.class);
+    assertManualBypassesInterval(
+        "clean-orphan-files", IcebergActions.CLEAN_ORPHAN, OrphanFilesCleaningProcess.class);
+    assertManualBypassesInterval(
+        "clean-dangling-delete-files",
+        IcebergActions.CLEAN_DANGLING_DELETE,
+        DanglingDeleteFilesCleaningProcess.class);
+    assertManualBypassesInterval(
+        "expire-data", IcebergActions.EXPIRE_DATA, DataExpiringProcess.class);
+  }
+
+  @Test
+  public void testManualRequestClearedWhenDisabled() {
+    assertManualClearedWhenDisabled("expire-snapshots", IcebergActions.EXPIRE_SNAPSHOTS);
+    assertManualClearedWhenDisabled("clean-orphan-files", IcebergActions.CLEAN_ORPHAN);
+    assertManualClearedWhenDisabled(
+        "clean-dangling-delete-files", IcebergActions.CLEAN_DANGLING_DELETE);
+    assertManualClearedWhenDisabled("expire-data", IcebergActions.EXPIRE_DATA);
   }
 
   @Test
@@ -248,6 +275,40 @@ public class TestIcebergProcessFactory {
     Assert.assertFalse(process.isPresent());
   }
 
+  private void assertManualBypassesInterval(
+      String configKey, Action action, Class<?> processClass) {
+    IcebergProcessFactory factory = openedFactory(configKey);
+    LocalExecutionEngine localEngine = mock(LocalExecutionEngine.class);
+    doReturn(LocalExecutionEngine.ENGINE_NAME).when(localEngine).name();
+    factory.availableExecuteEngines(Arrays.asList(localEngine));
+
+    TableRuntime runtime = createRuntime(configKey, true, System.currentTimeMillis());
+    runtime
+        .getState(DefaultTableRuntime.CLEANUP_STATE_KEY)
+        .addManualAction(action.getName(), System.currentTimeMillis());
+
+    Optional<TableProcess> process = factory.trigger(runtime, action);
+
+    Assert.assertTrue(process.isPresent());
+    Assert.assertTrue(processClass.isInstance(process.get()));
+    Assert.assertTrue(
+        runtime.getState(DefaultTableRuntime.CLEANUP_STATE_KEY).hasManualAction(action.getName()));
+  }
+
+  private void assertManualClearedWhenDisabled(String configKey, Action action) {
+    IcebergProcessFactory factory = openedFactory(configKey);
+    factory.availableExecuteEngines(Arrays.asList(mock(LocalExecutionEngine.class)));
+
+    TableRuntime runtime = createRuntime(configKey, false, 0L);
+    TableRuntimeCleanupState state = runtime.getState(DefaultTableRuntime.CLEANUP_STATE_KEY);
+    state.addManualAction(action.getName(), System.currentTimeMillis());
+
+    Optional<TableProcess> process = factory.trigger(runtime, action);
+
+    Assert.assertFalse(process.isPresent());
+    Assert.assertFalse(state.hasManualAction(action.getName()));
+  }
+
   private void assertTriggerDisabled(
       String configKey, org.apache.amoro.Action action, boolean enabled, long lastTime) {
     IcebergProcessFactory factory = new IcebergProcessFactory();
@@ -296,6 +357,16 @@ public class TestIcebergProcessFactory {
     TableRuntime runtime = mock(TableRuntime.class);
     doReturn(tableConfiguration).when(runtime).getTableConfiguration();
     doReturn(cleanupState).when(runtime).getState(DefaultTableRuntime.CLEANUP_STATE_KEY);
+    doAnswer(
+            invocation -> {
+              @SuppressWarnings("unchecked")
+              Function<TableRuntimeCleanupState, TableRuntimeCleanupState> updater =
+                  invocation.getArgument(1);
+              updater.apply(cleanupState);
+              return null;
+            })
+        .when(runtime)
+        .updateState(eq(DefaultTableRuntime.CLEANUP_STATE_KEY), any());
     if ("auto-create-tags".equals(configKey)) {
       doReturn(TableFormat.ICEBERG).when(runtime).getFormat();
     }

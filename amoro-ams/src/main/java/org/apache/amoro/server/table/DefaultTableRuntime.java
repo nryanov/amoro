@@ -18,7 +18,9 @@
 
 package org.apache.amoro.server.table;
 
+import org.apache.amoro.Action;
 import org.apache.amoro.AmoroTable;
+import org.apache.amoro.IcebergActions;
 import org.apache.amoro.api.BlockableOperation;
 import org.apache.amoro.config.OptimizingConfig;
 import org.apache.amoro.config.TableConfiguration;
@@ -360,6 +362,56 @@ public class DefaultTableRuntime extends AbstractTableRuntime {
             })
         .updateState(PENDING_INPUT_KEY, ignored -> new AbstractOptimizingEvaluator.PendingInput())
         .updateStatusCode(code -> OptimizingStatus.PENDING.getCode())
+        .commit();
+  }
+
+  public static boolean isManualCleanupAction(Action action) {
+    return IcebergActions.EXPIRE_SNAPSHOTS.equals(action)
+        || IcebergActions.CLEAN_ORPHAN.equals(action)
+        || IcebergActions.CLEAN_DANGLING_DELETE.equals(action)
+        || IcebergActions.EXPIRE_DATA.equals(action);
+  }
+
+  /**
+   * Queue a one-shot cleanup of {@code action}. A second request for the same action keeps the
+   * original timestamp. Retention settings are unchanged; only the schedule interval is skipped.
+   */
+  public void requestManualCleanup(Action action) {
+    if (!isManualCleanupAction(action)) {
+      throw new BadRequestException(
+          "Cleanup type must be expire-snapshots, clean-orphan-files, "
+              + "clean-dangling-delete-files, or expire-data");
+    }
+    if (hasManualCleanup(action)) {
+      return;
+    }
+    long requestedAt = System.currentTimeMillis();
+    store()
+        .begin()
+        .updateState(
+            CLEANUP_STATE_KEY, state -> state.addManualAction(action.getName(), requestedAt))
+        .commit();
+  }
+
+  public boolean hasManualCleanup(Action action) {
+    if (action == null) {
+      return false;
+    }
+    return store().getState(CLEANUP_STATE_KEY).hasManualAction(action.getName());
+  }
+
+  public long getManualCleanupRequestedAt() {
+    return store().getState(CLEANUP_STATE_KEY).getManualRequestedAt();
+  }
+
+  /** Drops one pending cleanup action. Other pending actions stay queued. */
+  public void clearManualCleanup(Action action) {
+    if (action == null || !hasManualCleanup(action)) {
+      return;
+    }
+    store()
+        .begin()
+        .updateState(CLEANUP_STATE_KEY, state -> state.clearManualAction(action.getName()))
         .commit();
   }
 

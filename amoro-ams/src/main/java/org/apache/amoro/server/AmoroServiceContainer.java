@@ -382,6 +382,11 @@ public class AmoroServiceContainer {
     return serviceConfig;
   }
 
+  /** Process schedulers are created when this node becomes leader. */
+  public ProcessService getProcessService() {
+    return processService;
+  }
+
   private void startThriftService() {
     startThriftServer(tableManagementServer, "thrift-table-management-server-thread");
     startThriftServer(optimizingServiceServer, "thrift-optimizing-server-thread");

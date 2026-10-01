@@ -932,6 +932,67 @@ paths:
                         $ref: '#/components/schemas/PageResult'
         '400':
           description: Bad request - invalid parameters (e.g., startTime > endTime, invalid timestamp format)
+  /api/ams/v1/tables/catalogs/{catalog}/dbs/{db}/tables/{table}/cleanup:
+    post:
+      tags:
+        - Tables
+      summary: Trigger table cleanup
+      description: >
+        Queue a one-shot cleanup action. The request skips the schedule interval and still
+        applies snapshot retention, orphan-file minimum age, and data-expiration retention.
+        Accepted type values are expire-snapshots, clean-orphan-files,
+        clean-dangling-delete-files, and expire-data. Matching is case-insensitive.
+        The response type is the canonical action name.
+      parameters:
+        - name: catalog
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: db
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - type
+              properties:
+                type:
+                  type: string
+                  example: expire-snapshots
+      responses:
+        '200':
+          description: Cleanup request accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - type: object
+                    properties:
+                      result:
+                        type: object
+                        properties:
+                          type:
+                            type: string
+                          status:
+                            type: string
+                            example: accepted
+        '400':
+          description: >
+            Unknown type, unsupported format, disabled action, action not installed on AMS,
+            or a process for this action is already running
 components:
   securitySchemes:
     ApiKeyAuth:

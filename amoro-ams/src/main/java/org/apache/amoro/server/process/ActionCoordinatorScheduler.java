@@ -24,6 +24,7 @@ import org.apache.amoro.process.ActionCoordinator;
 import org.apache.amoro.process.TableProcess;
 import org.apache.amoro.process.TableProcessStore;
 import org.apache.amoro.server.scheduler.PeriodicTableScheduler;
+import org.apache.amoro.server.table.DefaultTableRuntime;
 import org.apache.amoro.server.table.TableService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,6 +79,20 @@ public class ActionCoordinatorScheduler extends PeriodicTableScheduler {
   @Override
   protected long getNextExecutingTime(TableRuntime tableRuntime) {
     return coordinator.getNextExecutingTime(tableRuntime);
+  }
+
+  @Override
+  protected long initialDelay(TableRuntime tableRuntime) {
+    if (tableRuntime instanceof DefaultTableRuntime
+        && ((DefaultTableRuntime) tableRuntime).hasManualCleanup(coordinator.action())) {
+      return getBaseStartDelay();
+    }
+    return super.initialDelay(tableRuntime);
+  }
+
+  /** Run this action once without waiting for the periodic interval. */
+  public void triggerNow(TableRuntime tableRuntime) {
+    super.triggerNow(tableRuntime);
   }
 
   /**

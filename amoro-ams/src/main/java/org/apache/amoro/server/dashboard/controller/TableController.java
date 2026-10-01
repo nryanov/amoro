@@ -21,8 +21,10 @@ package org.apache.amoro.server.dashboard.controller;
 import static org.apache.amoro.properties.CatalogMetaProperties.CATALOG_TYPE_HIVE;
 
 import io.javalin.http.Context;
+import org.apache.amoro.Action;
 import org.apache.amoro.AmoroTable;
 import org.apache.amoro.Constants;
+import org.apache.amoro.IcebergActions;
 import org.apache.amoro.ServerTableIdentifier;
 import org.apache.amoro.TableFormat;
 import org.apache.amoro.TableRuntime;
@@ -57,6 +59,7 @@ import org.apache.amoro.server.dashboard.utils.AmsUtil;
 import org.apache.amoro.server.dashboard.utils.CommonUtil;
 import org.apache.amoro.server.optimizing.OptimizingStatus;
 import org.apache.amoro.server.persistence.TableRuntimeMeta;
+import org.apache.amoro.server.process.ProcessService;
 import org.apache.amoro.server.process.TableProcessMeta;
 import org.apache.amoro.server.table.DefaultTableRuntime;
 import org.apache.amoro.server.table.TableManager;
@@ -108,6 +111,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /** The controller that handles table requests. */
@@ -122,6 +126,7 @@ public class TableController {
   private final TableManager tableManager;
   private final ServerTableDescriptor tableDescriptor;
   private final Configurations serviceConfig;
+  private final Supplier<ProcessService> processServiceSupplier;
   private final ConcurrentHashMap<TableIdentifier, UpgradeRunningInfo> upgradeRunningInfo =
       new ConcurrentHashMap<>();
   private final ScheduledExecutorService tableUpgradeExecutor;
@@ -131,10 +136,30 @@ public class TableController {
       TableManager tableManager,
       ServerTableDescriptor tableDescriptor,
       Configurations serviceConfig) {
+    this(catalogManager, tableManager, tableDescriptor, serviceConfig, () -> null);
+  }
+
+  public TableController(
+      CatalogManager catalogManager,
+      TableManager tableManager,
+      ServerTableDescriptor tableDescriptor,
+      Configurations serviceConfig,
+      ProcessService processService) {
+    this(catalogManager, tableManager, tableDescriptor, serviceConfig, () -> processService);
+  }
+
+  public TableController(
+      CatalogManager catalogManager,
+      TableManager tableManager,
+      ServerTableDescriptor tableDescriptor,
+      Configurations serviceConfig,
+      Supplier<ProcessService> processServiceSupplier) {
     this.catalogManager = catalogManager;
     this.tableManager = tableManager;
     this.tableDescriptor = tableDescriptor;
     this.serviceConfig = serviceConfig;
+    this.processServiceSupplier =
+        processServiceSupplier == null ? () -> null : processServiceSupplier;
     this.tableUpgradeExecutor =
         Executors.newScheduledThreadPool(
             0,
@@ -807,6 +832,98 @@ public class TableController {
     result.put("type", optimizingType.name());
     result.put("status", tableRuntime.getOptimizingStatus().displayValue());
     ctx.json(OkResponse.of(result));
+  }
+
+  /**
+   * Queue a one-shot cleanup action. Retention settings are unchanged; only the schedule interval
+   * is skipped.
+   *
+   * @param ctx - context for handling the request and response
+   */
+  public void triggerCleanup(Context ctx) {
+    String catalog = ctx.pathParam("catalog");
+    String db = ctx.pathParam("db");
+    String table = ctx.pathParam("table");
+    Preconditions.checkArgument(
+        StringUtils.isNotBlank(catalog)
+            && StringUtils.isNotBlank(db)
+            && StringUtils.isNotBlank(table),
+        "catalog.database.tableName can not be empty in any element");
+    Preconditions.checkState(catalogManager.catalogExist(catalog), "invalid catalog!");
+
+    Map<String, Object> body = ctx.bodyAsClass(Map.class);
+    Object rawType = body == null ? null : body.get("type");
+    if (rawType == null || StringUtils.isBlank(rawType.toString())) {
+      throw new BadRequestException(
+          "Cleanup type must be expire-snapshots, clean-orphan-files, "
+              + "clean-dangling-delete-files, or expire-data");
+    }
+    Action action = Action.valueOf(rawType.toString());
+    if (!DefaultTableRuntime.isManualCleanupAction(action)) {
+      throw new BadRequestException(
+          "Cleanup type must be expire-snapshots, clean-orphan-files, "
+              + "clean-dangling-delete-files, or expire-data");
+    }
+
+    ServerTableIdentifier serverTableIdentifier =
+        tableManager.getServerTableIdentifier(
+            TableIdentifier.of(catalog, db, table).buildTableIdentifier());
+    if (serverTableIdentifier == null) {
+      throw new BadRequestException("Table not found");
+    }
+    TableFormat format = serverTableIdentifier.getFormat();
+    if (format != TableFormat.ICEBERG
+        && format != TableFormat.MIXED_ICEBERG
+        && format != TableFormat.MIXED_HIVE) {
+      throw new BadRequestException(
+          "Manual cleanup is only supported for Iceberg and Mixed tables");
+    }
+    TableRuntime runtime = tableManager.getTableRuntime(serverTableIdentifier.getId());
+    if (!(runtime instanceof DefaultTableRuntime)) {
+      throw new BadRequestException("Table runtime is not loaded on this AMS node");
+    }
+    DefaultTableRuntime tableRuntime = (DefaultTableRuntime) runtime;
+    if (IcebergActions.CLEAN_DANGLING_DELETE.equals(action) && format != TableFormat.ICEBERG) {
+      throw new BadRequestException(
+          "Cleaning dangling delete files is only supported for Iceberg tables");
+    }
+    if (!isCleanupActionEnabled(tableRuntime, action)) {
+      throw new BadRequestException(
+          "Cleanup action is disabled for this table: " + action.getName());
+    }
+    ProcessService processService = processServiceSupplier.get();
+    if (processService == null || !processService.isActionScheduled(action)) {
+      throw new BadRequestException(
+          "Cleanup action is not enabled on this AMS: " + action.getName());
+    }
+    if (processService.hasAliveTableProcess(tableRuntime, action)) {
+      throw new BadRequestException(
+          "A cleanup process for " + action.getName() + " is already running");
+    }
+
+    tableRuntime.requestManualCleanup(action);
+    processService.triggerNow(tableRuntime, action);
+
+    Map<String, String> result = new HashMap<>();
+    result.put("type", action.getName());
+    result.put("status", "accepted");
+    ctx.json(OkResponse.of(result));
+  }
+
+  private boolean isCleanupActionEnabled(DefaultTableRuntime tableRuntime, Action action) {
+    if (IcebergActions.EXPIRE_SNAPSHOTS.equals(action)) {
+      return tableRuntime.getTableConfiguration().isExpireSnapshotEnabled();
+    }
+    if (IcebergActions.CLEAN_ORPHAN.equals(action)) {
+      return tableRuntime.getTableConfiguration().isCleanOrphanEnabled();
+    }
+    if (IcebergActions.CLEAN_DANGLING_DELETE.equals(action)) {
+      return tableRuntime.getTableConfiguration().isDeleteDanglingDeleteFilesEnabled();
+    }
+    if (IcebergActions.EXPIRE_DATA.equals(action)) {
+      return tableRuntime.getTableConfiguration().getExpiringDataConfig().isEnabled();
+    }
+    return false;
   }
 
   /**

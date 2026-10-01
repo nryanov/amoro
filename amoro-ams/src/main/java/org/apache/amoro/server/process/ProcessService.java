@@ -24,6 +24,7 @@ import org.apache.amoro.ServerTableIdentifier;
 import org.apache.amoro.TableFormat;
 import org.apache.amoro.TableRuntime;
 import org.apache.amoro.config.TableConfiguration;
+import org.apache.amoro.exception.BadRequestException;
 import org.apache.amoro.process.ActionCoordinator;
 import org.apache.amoro.process.ExecuteEngine;
 import org.apache.amoro.process.ProcessEvent;
@@ -324,13 +325,38 @@ public class ProcessService extends PersistentBase {
   }
 
   /**
+   * Whether this AMS node has a scheduler installed for {@code action}. Plugin configuration can
+   * leave an action unregistered.
+   */
+  public boolean isActionScheduled(Action action) {
+    return action != null && actionCoordinators.containsKey(action.getName());
+  }
+
+  /**
+   * Submit one immediate run of {@code action}. The periodic schedule is left in place.
+   *
+   * @param tableRuntime table runtime
+   * @param action cleanup action
+   */
+  public void triggerNow(TableRuntime tableRuntime, Action action) {
+    ActionCoordinatorScheduler scheduler =
+        action == null ? null : actionCoordinators.get(action.getName());
+    if (scheduler == null) {
+      throw new BadRequestException(
+          "Cleanup action is not enabled on this AMS: "
+              + (action == null ? "null" : action.getName()));
+    }
+    scheduler.triggerNow(tableRuntime);
+  }
+
+  /**
    * Check whether there is any alive process for the table runtime and action.
    *
    * @param tableRuntime table runtime
    * @param action action type
    * @return true if exists
    */
-  private boolean hasAliveTableProcess(TableRuntime tableRuntime, Action action) {
+  public boolean hasAliveTableProcess(TableRuntime tableRuntime, Action action) {
     List<TableProcessHolder> processes =
         getTableProcessInstances(tableRuntime.getTableIdentifier()).values().stream()
             .filter(

@@ -124,7 +124,8 @@ public class DashboardServer {
     ServerTableDescriptor tableDescriptor =
         new ServerTableDescriptor(catalogManager, tableManager, serviceConfig);
     this.tableController =
-        new TableController(catalogManager, tableManager, tableDescriptor, serviceConfig);
+        new TableController(
+            catalogManager, tableManager, tableDescriptor, serviceConfig, ams::getProcessService);
     this.terminalController = new TerminalController(terminalManager);
     this.versionController = new VersionController();
     OverviewManager manager = new OverviewManager(serviceConfig);
@@ -300,6 +301,9 @@ public class DashboardServer {
             post(
                 "/catalogs/{catalog}/dbs/{db}/tables/{table}/optimizing",
                 tableController::triggerOptimizing);
+            post(
+                "/catalogs/{catalog}/dbs/{db}/tables/{table}/cleanup",
+                tableController::triggerCleanup);
             post(
                 "/catalogs/{catalog}/dbs/{db}/tables/{table}/optimizing-processes/{processId}/cancel",
                 tableController::cancelOptimizingProcess);

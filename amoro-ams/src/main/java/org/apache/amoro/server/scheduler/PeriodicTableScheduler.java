@@ -84,7 +84,7 @@ public abstract class PeriodicTableScheduler extends RuntimeHandlerChain {
         .forEach(
             tableRuntime -> {
               if (scheduledTables.add(tableRuntime.getTableIdentifier())) {
-                scheduleTableExecution(tableRuntime, getStartDelay());
+                scheduleTableExecution(tableRuntime, initialDelay(tableRuntime));
               }
             });
 
@@ -191,6 +191,34 @@ public abstract class PeriodicTableScheduler extends RuntimeHandlerChain {
 
   protected long getStartDelay() {
     return START_DELAY + getExecutorDelay();
+  }
+
+  /** Delay before the first run. Pending manual cleanup uses {@link #getBaseStartDelay()}. */
+  protected long initialDelay(TableRuntime tableRuntime) {
+    return getStartDelay();
+  }
+
+  protected long getBaseStartDelay() {
+    return START_DELAY;
+  }
+
+  /**
+   * Run one cleanup pass now. Does not replace the already scheduled periodic run.
+   *
+   * @param tableRuntime table runtime
+   */
+  protected void triggerNow(TableRuntime tableRuntime) {
+    executor.execute(
+        () -> {
+          try {
+            if (isExecutable(tableRuntime)) {
+              execute(tableRuntime);
+            }
+          } catch (Exception e) {
+            logger.error(
+                "exception when triggering table: {}", tableRuntime.getTableIdentifier(), e);
+          }
+        });
   }
 
   protected AmoroTable<?> loadTable(TableRuntime tableRuntime) {

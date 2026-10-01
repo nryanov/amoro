@@ -23,7 +23,7 @@ import { useRoute } from 'vue-router'
 import { Modal, message } from 'ant-design-vue'
 import { usePagination } from '@/hooks/usePagination'
 import type { BreadcrumbOptimizingItem, IColumns, ILableAndValue } from '@/types/common.type'
-import { cancelOptimizingProcess, getOptimizingProcesses, getTableDetail, getTableProcessTypes, getTasksByOptimizingProcessId, triggerOptimizing } from '@/services/table.service'
+import { cancelOptimizingProcess, getOptimizingProcesses, getTableDetail, getTableProcessTypes, getTasksByOptimizingProcessId, triggerCleanup, triggerOptimizing } from '@/services/table.service'
 import { bytesToSize, dateFormat, formatMS2Time } from '@/utils/index'
 import { canManageTable } from '@/utils/permission'
 
@@ -102,6 +102,15 @@ const writable = ref<boolean>(canManageTable())
 const showCompactionActions = ref(false)
 const compactionDisabled = ref(true)
 const triggeringCompaction = ref(false)
+const showCleanupActions = ref(false)
+const triggeringCleanup = ref('')
+const cleanupAvailability = reactive({
+  expireSnapshots: false,
+  cleanOrphanFiles: false,
+  cleanDanglingDeleteFiles: false,
+  expireData: false,
+})
+type CleanupType = 'expire-snapshots' | 'clean-orphan-files' | 'clean-dangling-delete-files' | 'expire-data'
 const idleOrPendingStatuses = ['idle', 'pending']
 const pagination = reactive(usePagination())
 const breadcrumbPagination = reactive(usePagination())
@@ -279,6 +288,97 @@ async function loadCompactionAvailability() {
   }
 }
 
+function propertyEnabled(properties: Record<string, unknown> | undefined, key: string, defaultValue: boolean) {
+  const raw = properties?.[key]
+  if (raw == null || String(raw).trim() === '') {
+    return defaultValue
+  }
+  return String(raw).toLowerCase() === 'true'
+}
+
+async function loadCleanupAvailability() {
+  showCleanupActions.value = false
+  cleanupAvailability.expireSnapshots = false
+  cleanupAvailability.cleanOrphanFiles = false
+  cleanupAvailability.cleanDanglingDeleteFiles = false
+  cleanupAvailability.expireData = false
+  if (props.processCategory !== 'CLEANUP' || !writable.value) {
+    return
+  }
+  try {
+    const detail = await getTableDetail({ ...sourceData })
+    const tableType = String(detail?.tableType || '')
+    const supported = tableType === 'ICEBERG' || tableType === 'MIXED_ICEBERG' || tableType === 'MIXED_HIVE'
+    if (!supported) {
+      return
+    }
+    const properties = detail?.properties as Record<string, unknown> | undefined
+    const gcEnabled = propertyEnabled(properties, 'gc.enabled', true)
+    cleanupAvailability.expireSnapshots = gcEnabled && propertyEnabled(properties, 'table-expire.enabled', true)
+    cleanupAvailability.cleanOrphanFiles = gcEnabled && propertyEnabled(properties, 'clean-orphan-file.enabled', false)
+    cleanupAvailability.cleanDanglingDeleteFiles = tableType === 'ICEBERG'
+      && gcEnabled
+      && propertyEnabled(properties, 'clean-dangling-delete-files.enabled', true)
+    cleanupAvailability.expireData = gcEnabled && propertyEnabled(properties, 'data-expire.enabled', false)
+    showCleanupActions.value = cleanupAvailability.expireSnapshots
+      || cleanupAvailability.cleanOrphanFiles
+      || cleanupAvailability.cleanDanglingDeleteFiles
+      || cleanupAvailability.expireData
+  }
+  catch (error) {
+    showCleanupActions.value = false
+  }
+}
+
+async function submitCleanup(type: CleanupType) {
+  try {
+    triggeringCleanup.value = type
+    await triggerCleanup({
+      catalog: String(sourceData.catalog || ''),
+      db: String(sourceData.db || ''),
+      table: String(sourceData.table || ''),
+      type,
+    })
+    message.success(t('triggerCleanupAccepted'))
+    emit('table-detail-refresh')
+    await refreshOptimizingProcesses()
+  }
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (error as Error)?.message || t('fail'))
+  }
+  finally {
+    triggeringCleanup.value = ''
+    await loadCleanupAvailability()
+  }
+}
+
+function triggerCleanupAction(type: CleanupType) {
+  const copy = {
+    'expire-snapshots': {
+      title: 'triggerExpireSnapshotsTitle',
+      content: 'triggerExpireSnapshotsContent',
+    },
+    'clean-orphan-files': {
+      title: 'triggerCleanOrphanFilesTitle',
+      content: 'triggerCleanOrphanFilesContent',
+    },
+    'clean-dangling-delete-files': {
+      title: 'triggerCleanDanglingDeleteFilesTitle',
+      content: 'triggerCleanDanglingDeleteFilesContent',
+    },
+    'expire-data': {
+      title: 'triggerExpireDataTitle',
+      content: 'triggerExpireDataContent',
+    },
+  }[type]
+  Modal.confirm({
+    title: t(copy.title),
+    content: t(copy.content),
+    onOk: () => submitCleanup(type),
+  })
+}
+
 async function submitCompaction(type: 'MINOR' | 'MAJOR' | 'FULL') {
   try {
     triggeringCompaction.value = true
@@ -320,6 +420,7 @@ onMounted(() => {
   refresh()
   getQueryDataDictList()
   loadCompactionAvailability()
+  loadCleanupAvailability()
 })
 </script>
 
@@ -344,6 +445,36 @@ onMounted(() => {
           </a-button>
           <a-button :disabled="compactionDisabled || triggeringCompaction" @click="triggerCompaction('FULL')">
             {{ t('fullCompaction') }}
+          </a-button>
+        </template>
+        <template v-if="showCleanupActions">
+          <a-button
+            v-if="cleanupAvailability.expireSnapshots"
+            :disabled="triggeringCleanup === 'expire-snapshots'"
+            @click="triggerCleanupAction('expire-snapshots')"
+          >
+            {{ t('expireSnapshots') }}
+          </a-button>
+          <a-button
+            v-if="cleanupAvailability.cleanOrphanFiles"
+            :disabled="triggeringCleanup === 'clean-orphan-files'"
+            @click="triggerCleanupAction('clean-orphan-files')"
+          >
+            {{ t('cleanOrphanFiles') }}
+          </a-button>
+          <a-button
+            v-if="cleanupAvailability.cleanDanglingDeleteFiles"
+            :disabled="triggeringCleanup === 'clean-dangling-delete-files'"
+            @click="triggerCleanupAction('clean-dangling-delete-files')"
+          >
+            {{ t('cleanDanglingDeleteFiles') }}
+          </a-button>
+          <a-button
+            v-if="cleanupAvailability.expireData"
+            :disabled="triggeringCleanup === 'expire-data'"
+            @click="triggerCleanupAction('expire-data')"
+          >
+            {{ t('expireData') }}
           </a-button>
         </template>
       </a-space>

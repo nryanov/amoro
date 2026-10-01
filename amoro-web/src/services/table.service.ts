@@ -226,6 +226,16 @@ export function triggerOptimizing(
   )
 }
 
+export function triggerCleanup(
+  { catalog = '' as string, db = '' as string, table = '' as string, type = '' as string },
+) {
+  return request.post(
+    `api/ams/v1/tables/catalogs/${catalog}/dbs/${db}/tables/${table}/cleanup`,
+    { type },
+    { handleError: false },
+  )
+}
+
 export function cancelOptimizingProcess(
   { catalog = '' as string, db = '' as string, table = '' as string, processId = '' as string },
 ) {
