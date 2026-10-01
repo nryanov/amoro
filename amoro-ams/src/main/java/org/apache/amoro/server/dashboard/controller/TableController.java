@@ -21,6 +21,7 @@ package org.apache.amoro.server.dashboard.controller;
 import static org.apache.amoro.properties.CatalogMetaProperties.CATALOG_TYPE_HIVE;
 
 import io.javalin.http.Context;
+import org.apache.amoro.AmoroTable;
 import org.apache.amoro.Constants;
 import org.apache.amoro.ServerTableIdentifier;
 import org.apache.amoro.TableFormat;
@@ -59,11 +60,13 @@ import org.apache.amoro.server.persistence.TableRuntimeMeta;
 import org.apache.amoro.server.process.TableProcessMeta;
 import org.apache.amoro.server.table.DefaultTableRuntime;
 import org.apache.amoro.server.table.TableManager;
+import org.apache.amoro.server.utils.IcebergTableUtil;
 import org.apache.amoro.shade.guava32.com.google.common.base.Function;
 import org.apache.amoro.shade.guava32.com.google.common.base.Preconditions;
 import org.apache.amoro.shade.guava32.com.google.common.collect.Range;
 import org.apache.amoro.shade.guava32.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.amoro.shade.thrift.org.apache.thrift.TException;
+import org.apache.amoro.table.MixedTable;
 import org.apache.amoro.table.TableIdentifier;
 import org.apache.amoro.table.TableMetaStore;
 import org.apache.amoro.table.TableProperties;
@@ -796,6 +799,8 @@ public class TableController {
       throw new BadRequestException("Table runtime is not loaded on this AMS node");
     }
     DefaultTableRuntime tableRuntime = (DefaultTableRuntime) runtime;
+    AmoroTable<?> amoroTable = catalogManager.loadTable(serverTableIdentifier.getIdentifier());
+    IcebergTableUtil.reloadIcebergMetadata((MixedTable) amoroTable.originalTable());
     tableRuntime.requestManualOptimizing(optimizingType);
 
     Map<String, String> result = new HashMap<>();

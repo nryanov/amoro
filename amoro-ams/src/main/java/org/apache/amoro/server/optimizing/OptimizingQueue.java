@@ -378,12 +378,13 @@ public class OptimizingQueue extends PersistentBase {
     try {
       ServerTableIdentifier identifier = tableRuntime.getTableIdentifier();
       AmoroTable<?> table = catalogManager.loadTable(identifier.getIdentifier());
+      MixedTable mixedTable = (MixedTable) table.originalTable();
+      if (tableRuntime.getManualOptimizingType() != null) {
+        IcebergTableUtil.reloadIcebergMetadata(mixedTable);
+      }
       AbstractOptimizingPlanner planner =
           IcebergTableUtil.createOptimizingPlanner(
-              tableRuntime.refresh(table),
-              (MixedTable) table.originalTable(),
-              getAvailableCore(),
-              maxInputSizePerThread());
+              tableRuntime.refresh(table), mixedTable, getAvailableCore(), maxInputSizePerThread());
       if (planner.isNecessary()) {
         return new TableOptimizingProcess(planner, tableRuntime);
       } else {

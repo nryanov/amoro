@@ -146,6 +146,10 @@ export default defineComponent({
       state.baseInfo = { ...baseInfo }
     }
 
+    const refreshTableDetail = () => {
+      detailRef.value?.getTableDetails()
+    }
+
     const handleTableNotFound = () => {
       state.baseInfo = {
         optimizingStatus: '',
@@ -234,6 +238,7 @@ export default defineComponent({
       isIceberg,
       hasSelectedTable,
       setBaseDetailInfo,
+      refreshTableDetail,
       handleTableNotFound,
       goBack,
       onChangeTab,
@@ -293,7 +298,7 @@ export default defineComponent({
                   <UFiles :has-partition="baseInfo.hasPartition" />
                 </a-tab-pane>
                 <a-tab-pane v-for="tab in tabConfigs" :key="tab.key" :tab="$t(tab.label)">
-                  <component :is="`U${tab.key}`" />
+                  <component :is="`U${tab.key}`" @table-detail-refresh="refreshTableDetail" />
                 </a-tab-pane>
               </a-tabs>
             </div>

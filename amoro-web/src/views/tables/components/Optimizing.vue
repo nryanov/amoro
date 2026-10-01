@@ -27,6 +27,10 @@ import { cancelOptimizingProcess, getOptimizingProcesses, getTableDetail, getTab
 import { bytesToSize, dateFormat, formatMS2Time } from '@/utils/index'
 import { canManageTable } from '@/utils/permission'
 
+const emit = defineEmits<{
+  (event: 'table-detail-refresh'): void
+}>()
+
 const props = withDefaults(defineProps<{
   processCategory?: string
   cancelModalTitleKey?: string
@@ -286,6 +290,7 @@ async function submitCompaction(type: 'MINOR' | 'MAJOR' | 'FULL') {
       type,
     })
     message.success(t('triggerCompactionAccepted'))
+    emit('table-detail-refresh')
     await refreshOptimizingProcesses()
   }
   catch (error) {

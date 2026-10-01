@@ -105,6 +105,20 @@ public class IcebergTableUtil {
     return table.currentSnapshot();
   }
 
+  /**
+   * Reloads Iceberg metadata on the cached table instance. Manual compaction calls this so planning
+   * and the next details read are not stuck on a {@code CachingCatalog} snapshot. The periodic
+   * refresh loop does not.
+   */
+  public static void reloadIcebergMetadata(MixedTable table) {
+    if (table.isKeyedTable()) {
+      table.asKeyedTable().baseTable().refresh();
+      table.asKeyedTable().changeTable().refresh();
+    } else {
+      table.asUnkeyedTable().refresh();
+    }
+  }
+
   public static Optional<Snapshot> findFirstMatchSnapshot(
       Table table, Predicate<Snapshot> predicate) {
     List<Snapshot> snapshots = Lists.newArrayList(table.snapshots());
